@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Dr. Horch — PsynthEthic Mind Demo</title>
+<meta name="description" content="Live demo with Dr. Horch — calm, neutral containment. Voice out. Optional mic. Subtle analytics.">
+<style>
+:root{
+  --sage:#DDE4D0; --ink:#2f3b2f; --ochre:#DDAE58; --terra:#B35C3D; --sand:#F4EBDD;
+  --muted:#6a6a6a; --bd:#0002;
+}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(180deg,var(--sand),var(--sage));font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--ink)}
+.wrap{max-width:820px;margin:20px auto 90px;padding:16px}
+.header{display:flex;justify-content:space-between;align-items:center;background:#ffffffcc;border:1px solid var(--bd);border-radius:14px;padding:12px 16px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;color:var(--terra)}
+.badge{width:28px;height:28px;border-radius:50%;background:radial-gradient(circle at 30% 30%,var(--terra),#7c3f2b)}
+.pill{padding:6px 10px;border:1px solid var(--bd);border-radius:999px;background:#fff;font-size:12px}
+.banner{margin-top:10px;padding:10px 12px;border:1px solid var(--bd);border-radius:12px;background:#fff}
+.banner.warn{background:#fff6e6}
+.banner.err{background:#ffecec}
+.chat{margin-top:14px;background:#fff;border:1px solid var(--bd);border-radius:14px;min-height:440px;padding:12px 12px 84px;position:relative}
+.row{display:flex;margin:8px 0}
+.bubble{max-width:74%;padding:10px 12px;border-radius:12px;border:1px solid var(--bd);background:#fff;line-height:1.4}
+.right{justify-content:flex-end}
+.right .bubble{background:var(--sage)}
+.footer{position:fixed;left:16px;right:16px;bottom:16px;display:flex;gap:10px;align-items:center;background:#fff;border:1px solid var(--bd);border-radius:14px;padding:10px 12px}
+.mic{width:40px;height:40px;border-radius:50%;background:var(--terra);color:#fff;border:none;cursor:pointer;font-size:18px}
+.btn{padding:10px 14px;border:none;border-radius:12px;background:linear-gradient(180deg,var(--ochre),#c9973f);font-weight:700;cursor:pointer}
+.input{flex:1;padding:10px 12px;border:1px solid var(--bd);border-radius:10px}
+.note{font-size:12px;color:var(--muted)}
+.hstrip{position:fixed;left:0;right:0;bottom:0;height:28px;background:#0f0f0f;opacity:.78;color:#e7e1d5;display:flex;gap:14px;align-items:center;padding:0 12px;font-size:12px;font-variant-numeric:tabular-nums}
+.hstrip span{opacity:.9}
+.timerbar{position:absolute;left:0;right:0;bottom:28px;height:3px;background:#0002}
+.timerbar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--terra),var(--ochre))}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="brand"><div class="badge" aria-hidden="true"></div> Dr. Horch — PsynthEthic Mind</div>
+    <div class="pill">Demo Session</div>
+  </div>
+
+  <div id="expBanner" class="banner hidden"></div>
+  <div id="guidance" class="banner" style="font-size:12px;color:#6a6a6a">
+    Voice output works in most browsers. Mic input may require <b>HTTPS</b> or <b>localhost</b> (Chrome/Edge). On Android, you can use the <b>keyboard mic</b> to dictate.
+  </div>
+  <div id="status" class="banner hidden"></div>
+
+  <div class="chat" id="chat">
+    <div class="row"><div class="bubble">Welcome. I’m here in a calm, neutral way. You can speak, or type and press <b>Send</b>. We will go at your pace.</div></div>
+  </div>
+
+  <div style="margin-top:8px" class="note">This demo simulates a 45-minute frame with a short timer.</div>
+</div>
+
+<div class="footer">
+  <button class="mic" id="micBtn" title="Start/stop listening">🎤</button>
+  <input id="textInput" class="input" placeholder="Type here… then press Send"/>
+  <button class="btn" id="sendBtn">Send</button>
+</div>
+
+<div class="timerbar"><i id="tbar"></i></div>
+<div class="hstrip" id="hud">
+  <span id="tleft">Time: 00:00 / 02:00</span>
+  <span id="emri">EMRI: 0</span>
+  <span id="sfi">Self-Focus: 0</span>
+  <span id="defs">Defenses: —</span>
+</div>
+
+<script>
+/* ====== Config ====== */
+const CONF = {
+  personaName: "Dr. Horch",
+  demoMinutes: 2,       // short demo; set 45 for full frame
+  showHUD: true,
+  cadence: { pause:"… ", softener:"ja, " } // subtle cadence hints
+};
+
+/* ====== DOM ====== */
+const chat = document.getElementById('chat');
+const micBtn = document.getElementById('micBtn');
+const sendBtn = document.getElementById('sendBtn');
+const input = document.getElementById('textInput');
+const statusBox = document.getElementById('status');
+const expBanner = document.getElementById('expBanner');
+const tbar = document.getElementById('tbar');
+const tleft = document.getElementById('tleft');
+const emriEl = document.getElementById('emri');
+const sfiEl = document.getElementById('sfi');
+const defsEl = document.getElementById('defs');
+const hud = document.getElementById('hud');
+
+/* ====== UI helpers ====== */
+function showStatus(msg, kind='info'){
+  statusBox.innerHTML = msg;
+  statusBox.className = 'banner ' + (kind==='err'?'err':(kind==='warn'?'warn':'' ));
+  statusBox.classList.remove('hidden');
+  clearTimeout(showStatus._t);
+  showStatus._t = setTimeout(()=>statusBox.classList.add('hidden'), 3600);
+}
+function addBubble(text, side='left'){
+  const row = document.createElement('div'); row.className='row '+(side==='right'?'right':'');
+  const b = document.createElement('div'); b.className='bubble'; b.textContent = text;
+  row.appendChild(b); chat.appendChild(row); chat.scrollTop = chat.scrollHeight;
+}
+function fmt(t){ return String(t).padStart(2,'0'); }
+
+/* ====== Optional expiry: ?until=YYYY-MM-DDTHH:MM ====== */
+(function checkExpiry(){
+  const u = new URL(location.href);
+  const until = u.searchParams.get('until');
+  if(!until) return;
+  const then = new Date(until);
+  if(isNaN(+then)) return;
+  const now = new Date();
+  if(now > then){
+    expBanner.classList.remove('hidden'); expBanner.classList.add('err');
+    expBanner.innerHTML = "Access window for this private demo has ended.";
+    input.disabled = true; sendBtn.disabled = true; micBtn.disabled = true;
+  }else{
+    expBanner.classList.remove('hidden'); expBanner.classList.add('warn');
+    const mins = Math.max(1, Math.round((then - now)/60000));
+    expBanner.innerHTML = `This private demo link remains active for ~${mins} minute(s).`;
+  }
+})();
+
+/* ====== Timer ====== */
+(function timerStart(){
+  const total = CONF.demoMinutes*60; let t=0;
+  const iv = setInterval(()=>{
+    t++; if(t>total) { clearInterval(iv); return; }
+    tbar.style.width = (t/total*100)+'%';
+    tleft.textContent = `Time: ${fmt(Math.floor(t/60))}:${fmt(t%60)} / ${fmt(Math.floor(total/60))}:${fmt(total%60)}`;
+  },1000);
+})();
+
+/* ====== Light analytics ====== */
+const affectLex = ["angry","rage","furious","hate","sad","grief","cry","hurt","fear","scared","panic","anxious","anxiety","worry","ashamed","shame","guilt","guilty","lonely","despair","depressed","envy","jealous","tired","empty","alone","abandoned"];
+function tokenize(s){return (s||"").toLowerCase().replace(/[^\p{L}\p{N}\s']/gu," ").split(/\s+/).filter(Boolean)}
+function narcissismIndex(tokens){const w=tokens.length||1; const self=tokens.filter(t=>["i","me","my","mine","myself"].includes(t)).length; return Math.min(100, Math.round((self/w)*600));}
+function emriScore(text,tokens){const w=Math.max(1,tokens.length); const affect=affectLex.reduce((a,w)=>a+(text.toLowerCase().includes(w)?1:0),0); const ex=(text.match(/!/g)||[]).length, q=(text.match(/\?/g)||[]).length, caps=(text.match(/\b[A-Z]{3,}\b/g)||[]).length; const raw=affect*8+ex*6+q*3+caps*5; const per100=raw/Math.sqrt(w); return Math.max(0,Math.min(100,Math.round(per100*9))); }
+function defenses(text){const t=text.toLowerCase(); const out=[]; if(/\b(no|not|never|nothing|none)\b/.test(t)) out.push("denial"); if(/(you|they)\s+(always|never|make|made|keep)/.test(t)) out.push("projection"); if(/(always|never|all|none)\b/.test(t) && /(good|bad|wrong|right|perfect|awful)/.test(t)) out.push("splitting"); return [...new Set(out)];}
+
+/* ====== Dr. Horch’s containment voice ====== */
+function reflectHorch(text){
+  const openings = [
+    `${CONF.cadence.softener}I am taking in how this is for you${CONF.cadence.pause}`,
+    `${CONF.cadence.softener}I hear the weight in the way you put words to this${CONF.cadence.pause}`,
+    `${CONF.cadence.softener}We can stay close to it, without pushing it away${CONF.cadence.pause}`
+  ];
+  const closings = [
+    "We do not have to fix it now; being with it matters.",
+    "Let us go gently and keep noticing what it stirs.",
+    "We can hold it as it is, and breathe through it together."
+  ];
+  const opener = openings[Math.floor(Math.random()*openings.length)];
+  const closer = closings[Math.floor(Math.random()*closings.length)];
+  const mid = text.trim().slice(0,200) + (text.trim().length>200?"…":"");
+  return `${opener} ${mid} ${closer}`;
+}
+
+/* ====== Voice out ====== */
+function speak(text){
+  if(!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(text);
+  const voices = speechSynthesis.getVoices();
+  const v = voices.find(v=>/en-US|en-GB/i.test(v.lang)) || voices[0];
+  if(v) u.voice = v;
+  u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+
+/* ====== Input handling ====== */
+function handleInput(text){
+  if(!text) return;
+  addBubble(text, 'left');
+  const tokens = tokenize(text);
+  const narc = narcissismIndex(tokens);
+  const emri = emriScore(text, tokens);
+  const defs = defenses(text);
+  emriEl.textContent = `EMRI: ${emri}`;
+  sfiEl.textContent = `Self-Focus: ${narc}`;
+  defsEl.textContent = `Defenses: ${defs.length?defs.join(", "):"—"}`;
+  const reply = reflectHorch(text);
+  setTimeout(()=>{ addBubble(reply, 'right'); speak(reply); }, 420);
+}
+
+/* Typing */
+sendBtn.addEventListener('click', ()=>{ const v=input.value.trim(); input.value=''; handleInput(v); });
+input.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ const v=input.value.trim(); input.value=''; handleInput(v); }});
+
+/* Mic (where supported) */
+let listening=false, recog=null;
+function startRec(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ showStatus("Mic not supported here. Use Chrome/Edge over HTTPS or localhost, or use your keyboard mic.", "warn"); return; }
+  if(location.protocol==='file:'){ showStatus("Mic may fail on file://. Serve via HTTPS/localhost.", "warn"); }
+  recog = new SR(); recog.lang='en-US'; recog.interimResults=false; recog.maxAlternatives=1;
+  recog.onresult=(e)=>{ const txt = e.results[0][0].transcript; handleInput(txt); };
+  recog.onerror=(e)=>{ showStatus("Mic error: "+(e.error||"unknown")+". Check permissions in the address bar.", "err"); };
+  recog.onend=()=>{ if(listening){ try{ recog.start(); }catch(_){} } };
+  try{ recog.start(); listening=true; micBtn.textContent='⏹'; showStatus("Listening… speak now."); }catch(err){ showStatus("Could not start mic: "+err, "err"); }
+}
+function stopRec(){ listening=false; micBtn.textContent='🎤'; try{recog&&recog.stop();}catch(_){}; showStatus("Stopped listening."); }
+micBtn.addEventListener('click', ()=>{ listening?stopRec():startRec(); });
+
+/* HUD visibility */
+if(!CONF.showHUD){ hud.style.display='none'; }
+
+/* Warmup line */
+setTimeout(()=>{ addBubble("… ja, we can begin whenever you are ready.", "right"); speak("We can begin whenever you are ready."); }, 600);
+</script>
+</body>
+</html>
