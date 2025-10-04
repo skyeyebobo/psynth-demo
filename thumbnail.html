@@ -1,6 +1,298 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dr. Horch — DemoPlay</title>
+<style>
+  :root{--bg:#F4EBDD;--ink:#2f3b2f;--terra:#B35C3D;--sage:#DDE4D0;--bd:#0002}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--ink)}
+  .wrap{max-width:860px;margin:18px auto;padding:16px}
+  h1{margin:4px 0 12px}
+  .card{background:#fff;border:1px solid var(--bd);border-radius:14px;padding:12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  textarea{width:100%;min-height:100px;border:1px solid var(--bd);border-radius:10px;padding:10px;font-size:15px}
+  .btn{padding:10px 14px;border:none;border-radius:10px;background:linear-gradient(180deg,#ddaE58,#c9973f);color:#000;font-weight:700;cursor:pointer}
+  .btn.ghost{background:#fff;border:1px solid var(--bd);font-weight:600}
+  .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  select,input[type="range"]{padding:6px;border:1px solid var(--bd);border-radius:8px}
+  .log{margin-top:12px;max-height:380px;overflow:auto;padding-right:6px}
+  .turn{display:flex;margin:8px 0;gap:10px}
+  .you .bubble{background:#eef6ee}
+  .horch .bubble{background:var(--sage)}
+  .bubble{padding:10px 12px;border:1px solid var(--bd);border-radius:12px;max-width:80%}
+  #status{margin-top:6px;font-size:13px;color:#555}
+  .mini{font-size:12px;color:#6a6a6a}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Dr. Horch — DemoPlay</h1>
+  <div class="card">
+    <div class="row">
+      <textarea id="input" placeholder="Speak or type a few lines… then press Process."></textarea>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" id="processBtn">Process</button>
+      <button class="btn ghost" id="micBtn">🎙️ Mic</button>
+      <button class="btn ghost" id="muteBtn">Mute</button>
+      <div class="controls">
+        <label class="mini">Voice: <select id="voiceSel"></select></label>
+        <label class="mini">Rate: <input id="rate" type="range" min="0.6" max="1.1" step="0.01"></label>
+        <label class="mini">Pitch: <input id="pitch" type="range" min="0.6" max="1.1" step="0.01"></label>
+      </div>
+    </div>
+    <div id="status"></div>
+    <div class="log" id="log"></div>
+    <div class="mini" style="margin-top:8px">Tip: choose a <b>male German</b> voice if available on your device; otherwise pick a deeper male English voice and lower rate/pitch.</div>
+  </div>
+</div>
+
+<script>
+/* ===================== State ===================== */
+let lastReflection = "";
+let speaking = false, muted = false;
+let voice = null;
+let voices = [];
+let recog = null, listening = false;
+const inputEl = document.getElementById('input');
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const rateEl = document.getElementById('rate');
+const pitchEl = document.getElementById('pitch');
+const voiceSel = document.getElementById('voiceSel');
+const micBtn = document.getElementById('micBtn');
+const muteBtn = document.getElementById('muteBtn');
+
+/* ===================== Utils ===================== */
+function addTurn(who, text){
+  const row = document.createElement('div'); row.className = 'turn '+who;
+  const bubble = document.createElement('div'); bubble.className='bubble'; bubble.textContent = text;
+  row.appendChild(bubble); logEl.appendChild(row); logEl.scrollTop = logEl.scrollHeight;
+}
+function setStatus(msg){ statusEl.textContent = msg||''; }
+function tokenize(s){ return (s||"").toLowerCase().replace(/[^\p{L}\p{N}\s']/gu," ").split(/\s+/).filter(Boolean); }
+
+/* ===================== Heuristics ===================== */
+const affectLex = {
+  anger:["anger","angry","rage","furious","mad","irritated","annoyed","frustrated","hate"],
+  sadness:["sad","grief","cry","hurt","lonely","loss","empty","despair","depressed","down"],
+  fear:["afraid","fear","scared","panic","anxious","anxiety","worry","nervous","unsafe"],
+  shame:["shame","ashamed","guilt","guilty","embarrassed","humiliated","worthless"],
+  envy:["envy","jealous","jealousy"],
+  fatigue:["tired","exhausted","overwhelmed","burned","burnt","numb"]
+};
+const defenseRules = [
+  {name:"denial", test:t=>/\b(no|not|never|nothing|none|fine)\b/.test(t)},
+  {name:"projection", test:t=>/(you|they|he|she)\s+(always|never|keep|made|make|ruin)/.test(t)},
+  {name:"splitting", test:t=>/\b(always|never|all|none)\b/.test(t)&&/\b(good|bad|perfect|awful|right|wrong)\b/.test(t)},
+  {name:"idealization", test:t=>/\bperfect|ideal|flawless\b/.test(t)},
+  {name:"intellectualization", test:t=>/\btherefore|logically|objectively|rationally\b/.test(t)}
+];
+
+function detectAffect(text){
+  const t = text.toLowerCase();
+  const hits = [];
+  for(const k in affectLex){
+    if(affectLex[k].some(w=>t.includes(w))) hits.push(k);
+  }
+  return hits;
+}
+function detectDefenses(text){
+  const t = text.toLowerCase();
+  return defenseRules.filter(r=>r.test(t)).map(r=>r.name);
+}
+function keyPhrases(text){
+  // pull a couple salient phrases (very light)
+  const parts = text.split(/[.?!]/).map(s=>s.trim()).filter(Boolean);
+  return parts.slice(0,2);
+}
+
+/* ===================== Dr. Horch Reflector ===================== */
+function reflect(userText){
+  const t = userText.trim();
+  const toks = tokenize(t);
+  const affects = detectAffect(t);
+  const defs = detectDefenses(t);
+  const phrases = keyPhrases(t);
+
+  const openings = [
+    "ja, I am taking in how this lands for you…",
+    "I hear the weight in the way you say this…",
+    "we can stay near it for a moment, without pushing it away…",
+    "let us hold this gently, as it is, and breathe with it…"
+  ];
+  const deepen = [
+    "what feels most alive in your body as you say this?",
+    "where does this touch something older or familiar?",
+    "if we pause here, what words arrive next on their own?",
+    "what part of you most wants to be heard right now?"
+  ];
+  const linkers = [
+    "I notice",
+    "it stands out",
+    "there is a thread",
+    "perhaps we can be curious about"
+  ];
+
+  // Build segments
+  let seg1 = openings[Math.floor(Math.random()*openings.length)];
+
+  // Name affect softly
+  let seg2 = "";
+  if(affects.length){
+    const named = affects.slice(0,2).join(" and ");
+    seg2 = ` I am hearing traces of ${named}.`;
+  }
+
+  // Mirror short phrase
+  let seg3 = "";
+  if(phrases.length){
+    seg3 = ` In your words: “${phrases[0]}”${phrases[1]?` … and “${phrases[1]}”`:''}.`;
+  }
+
+  // Notice defenses (without accusation)
+  let seg4 = "";
+  if(defs.length){
+    const d = defs.slice(0,2).join(" / ");
+    seg4 = ` ${linkers[Math.floor(Math.random()*linkers.length)]} a protective move (${d}); we can respect that and still stay close.`;
+  }
+
+  // Time & agency framing
+  let seg5 = ` We do not have to fix it now; staying with it is already movement.`;
+  let seg6 = ` ${deepen[Math.floor(Math.random()*deepen.length)]}`;
+
+  const out = `${seg1}${seg2}${seg3}${seg4}${seg5} ${seg6}`;
+  return out;
+}
+
+/* ===================== Process Flow ===================== */
+function processInput(){
+  const raw = inputEl.value.trim();
+  if(!raw) return;
+  addTurn('you', raw);
+
+  const r = reflect(raw);
+
+  if (r !== lastReflection){
+    addTurn('horch', r);
+    speak(r);
+    lastReflection = r;
+  }
+  // clear input to avoid repeats
+  inputEl.value = '';
+}
+document.getElementById('processBtn').addEventListener('click', processInput);
+inputEl.addEventListener('keydown', e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); processInput(); }
+});
+
+/* ===================== Speech Synthesis ===================== */
+function populateVoices(){
+  voices = speechSynthesis.getVoices();
+  voiceSel.innerHTML = '';
+  voices.forEach((v,i)=>{
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = `${v.name} — ${v.lang}${v.localService?' (local)':''}`;
+    voiceSel.appendChild(opt);
+  });
+  // try to preselect a German male-ish voice
+  let idx =
+    voices.findIndex(v=>/de/i.test(v.lang) && /male|mann|deutsch/i.test(v.name)) ;
+  if(idx<0) idx = voices.findIndex(v=>/de/i.test(v.lang));
+  if(idx<0) idx = voices.findIndex(v=>/en/i.test(v.lang) && /male|daniel|george|brian|michael|hans|klaus/i.test(v.name));
+  if(idx<0) idx = 0;
+  voiceSel.selectedIndex = idx>=0?idx:0;
+  voice = voices[voiceSel.selectedIndex] || null;
+
+  // restore saved prefs
+  try{
+    const saved = JSON.parse(localStorage.getItem('horchVoicePrefs')||'{}');
+    if(saved.name){
+      const j = voices.findIndex(v=>v.name===saved.name);
+      if(j>=0){ voiceSel.selectedIndex = j; voice = voices[j]; }
+    }
+    rateEl.value = saved.rate || 0.85;
+    pitchEl.value = saved.pitch || 0.8;
+  }catch(_){}
+}
+speechSynthesis.onvoiceschanged = ()=>{ populateVoices(); };
+if (speechSynthesis.getVoices().length) populateVoices();
+
+// Defaults
+rateEl.value = rateEl.value || 0.85;
+pitchEl.value = pitchEl.value || 0.8;
+
+voiceSel.addEventListener('change', ()=>{
+  voice = voices[voiceSel.selectedIndex] || null;
+  savePrefs();
+});
+rateEl.addEventListener('input', savePrefs);
+pitchEl.addEventListener('input', savePrefs);
+
+function savePrefs(){
+  try{
+    localStorage.setItem('horchVoicePrefs', JSON.stringify({
+      name: voice?voice.name:null,
+      rate: parseFloat(rateEl.value),
+      pitch: parseFloat(pitchEl.value)
+    }));
+  }catch(_){}
+}
+
+function speak(text){
+  if(!('speechSynthesis' in window) || muted) return;
+  try{
+    window.speechSynthesis.cancel(); // clear any queue
+    const u = new SpeechSynthesisUtterance(text);
+    if(voice) u.voice = voice;
+    u.rate = parseFloat(rateEl.value||0.85);
+    u.pitch = parseFloat(pitchEl.value||0.8);
+    u.volume = 1.0;
+
+    speaking = true;
+    setStatus("🟢 Dr. Horch is speaking…");
+
+    u.onend = ()=>{ speaking=false; setStatus(""); };
+    u.onerror = ()=>{ speaking=false; setStatus(""); };
+
+    window.speechSynthesis.speak(u);
+  }catch(e){
+    speaking=false; setStatus("");
+    console.error(e);
+  }
+}
+
+/* ===================== Mic ===================== */
+function startRec(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ setStatus("Mic not supported here (use HTTPS Chrome/Edge, or your keyboard mic)."); return; }
+  if(location.protocol==='file:'){ setStatus("Mic may fail on file:// — use HTTPS or localhost."); }
+  recog = new SR(); recog.lang='en-US'; recog.interimResults=false; recog.maxAlternatives=1;
+  recog.onresult = (e)=>{ const txt = e.results[0][0].transcript || ""; inputEl.value = txt; processInput(); };
+  recog.onerror = (e)=> setStatus("Mic error: "+(e.error||"unknown"));
+  recog.onend = ()=>{ if(listening){ try{ recog.start(); }catch(_){ listening=false; micBtn.textContent='🎙️ Mic'; } } };
+  try{ recog.start(); listening=true; micBtn.textContent='⏹ Stop'; setStatus("Listening… speak now."); }catch(err){ setStatus("Could not start mic: "+err); }
+}
+function stopRec(){ listening=false; micBtn.textContent='🎙️ Mic'; try{ recog&&recog.stop(); }catch(_){ } setStatus("Stopped listening."); }
+micBtn.addEventListener('click', ()=> listening ? stopRec() : startRec());
+
+/* ===================== Mute ===================== */
+muteBtn.addEventListener('click', ()=>{
+  muted = !muted;
+  try{ window.speechSynthesis.cancel(); }catch(_){}
+  muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+});
+
+/* Warm greeting once */
+setTimeout(()=>{ addTurn('horch',"… ja, we can begin whenever you are ready."); }, 500);
+</script>
+</body>
+</html> html>
+<html lang="en">
+<head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dr. Horch Demo</title>
