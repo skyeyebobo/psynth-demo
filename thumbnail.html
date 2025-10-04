@@ -1,62 +1,184 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Dr. Horch — Demo Thumbnail</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dr. Horch Demo</title>
+<style>
     body {
-      margin: 0;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: #F4EBDD;
-      color: #2f3b2f;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      text-align: center;
+        font-family: Arial, sans-serif;
+        background-color: #f7f3eb;
+        color: #333;
+        text-align: center;
+        padding: 30px;
     }
-    .card {
-      max-width: 340px;
-      padding: 20px;
+    h1 {
+        color: #2f3b2f;
     }
-    img {
-      width: 100%;
-      max-width: 260px;
-      height: auto;
-      border-radius: 18px;
-      border: 3px solid #B35C3D;
-      box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+    #sessionBox {
+        width: 80%;
+        max-width: 600px;
+        margin: 0 auto;
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
     }
-    .caption {
-      margin-top: 14px;
-      font-size: 16px;
-      font-weight: 600;
+    textarea {
+        width: 100%;
+        height: 100px;
+        padding: 10px;
+        font-size: 14px;
+        margin-bottom: 10px;
     }
-    .link {
-      margin-top: 10px;
-      font-size: 13px;
-      color: #6a6a6a;
-      word-break: break-word;
+    button {
+        padding: 10px 20px;
+        font-size: 16px;
+        background-color: #2f3b2f;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        margin: 5px;
     }
-    .link a {
-      color: #B35C3D;
-      text-decoration: none;
+    #output {
+        margin-top: 20px;
+        font-style: italic;
+        min-height: 50px;
     }
-  </style>
+    #status {
+        margin-top: 15px;
+        font-size: 14px;
+        color: #2f3b2f;
+        font-weight: bold;
+    }
+</style>
 </head>
 <body>
-  <div class="card">
-    <a href="dr_horch_demo.html">
-      <img src="dr_horch_thumbnail.png" alt="Speak with Dr. Horch">
-    </a>
-    <div class="caption">
-      Tap to start a demo session with Dr. Horch
-    </div>
-    <div class="link">
-      Or open directly: <br>
-      <a href="dr_horch_demo.html">https://skyeyebobo.github.io/psynth-demo/dr_horch_demo.html</a>
-    </div>
-  </div>
+
+<h1>Dr. Horch Demo</h1>
+<div id="sessionBox">
+    <textarea id="inputText" placeholder="Type or dictate your thoughts here..."></textarea><br>
+    <button onclick="processInput()">Process</button>
+    <button onclick="startVoiceInput()">🎙️ Speak</button>
+    <div id="output"></div>
+    <div id="status"></div>
+</div>
+
+<script>
+let recognition;
+let speechQueue = [];
+let isSpeaking = false;
+let lastReflection = "";
+let selectedVoice = null;
+
+// Voice input (mic)
+function startVoiceInput() {
+    if (!('webkitSpeechRecognition' in window)) {
+        alert("Speech recognition not supported on this browser.");
+        return;
+    }
+    recognition = new webkitSpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        document.getElementById("inputText").value = transcript;
+    };
+    recognition.start();
+}
+
+// Fake reflection (demo logic)
+function generateReflection(input) {
+    return `I hear you saying: "${input}". Let us stay with that feeling for a moment...`;
+}
+
+// Process input
+function processInput() {
+    const inputElem = document.getElementById("inputText");
+    const input = inputElem.value.trim();
+    if (!input) return;
+
+    const reflection = generateReflection(input);
+
+    // Only speak if it’s new
+    if (reflection !== lastReflection) {
+        document.getElementById("output").innerText = reflection;
+        queueSpeech(reflection);
+        lastReflection = reflection;
+    }
+
+    // Clear input
+    inputElem.value = "";
+}
+
+// Queue system
+function queueSpeech(text) {
+    speechQueue.push(text);
+    if (!isSpeaking) {
+        playNextInQueue();
+    }
+}
+
+function playNextInQueue() {
+    if (speechQueue.length === 0) {
+        isSpeaking = false;
+        return;
+    }
+    const text = speechQueue.shift();
+    speakText(text, playNextInQueue);
+}
+
+// Speech synthesis
+function speakText(text, callback) {
+    if (speechSynthesis.speaking || speechSynthesis.pending) {
+        speechSynthesis.cancel();
+    }
+
+    const utterance = new SpeechSynthesisUtterance(text);
+
+    // Find voice if not set
+    if (!selectedVoice) {
+        const voices = speechSynthesis.getVoices();
+        // Try to find a German male voice
+        selectedVoice = voices.find(v => v.lang.includes("de") && v.name.toLowerCase().includes("male"))
+                       || voices.find(v => v.lang.includes("de"))
+                       || voices.find(v => v.lang.includes("en") && v.name.toLowerCase().includes("male"))
+                       || voices[0]; // fallback
+    }
+    utterance.voice = selectedVoice;
+
+    // Voice style
+    utterance.pitch = 0.8;   // deeper
+    utterance.rate = 0.85;   // slower
+    utterance.volume = 1.0;
+
+    isSpeaking = true;
+    document.getElementById("status").innerText = "🟢 Dr. Horch is speaking...";
+
+    utterance.onend = () => {
+        isSpeaking = false;
+        document.getElementById("status").innerText = "";
+        callback();
+    };
+
+    utterance.onerror = (e) => {
+        console.error("Speech synthesis error:", e);
+        isSpeaking = false;
+        document.getElementById("status").innerText = "";
+        callback();
+    };
+
+    speechSynthesis.speak(utterance);
+}
+
+// Ensure voices are loaded
+speechSynthesis.onvoiceschanged = () => {
+    if (!selectedVoice) {
+        selectedVoice = speechSynthesis.getVoices().find(v => v.lang.includes("de")) || null;
+    }
+};
+</script>
+
 </body>
 </html>
